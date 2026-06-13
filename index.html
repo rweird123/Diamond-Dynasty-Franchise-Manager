@@ -1,9 +1,10 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Chicago Herons | Franchise Manager</title>
+<title>Diamond Dynasty | Franchise Manager</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -653,7 +654,7 @@ input[type="range"] { width: 100%; accent-color: var(--navy); }
     <div class="header-left">
       <span class="header-icon" onclick="goHome()" style="cursor:pointer" title="Main Menu">&#9918;</span>
       <div>
-        <h1 class="team-name">Chicago Herons</h1>
+        <h1 class="team-name" id="headerTeamName">Diamond Dynasty</h1>
         <div class="team-info" id="headerInfo">AL Central &bull; Season 1</div>
       </div>
     </div>
@@ -715,14 +716,27 @@ let PLAYERS = [
 ];
 
 let TEAM = {
-  name: 'Chicago Herons',
-  wins: 82, losses: 80,
-  runsScored: 745, runsAllowed: 698,
-  cbtThreshold: 233000000,
-  cbtYearsOver: 0,
-  baseRevenue: 220000000,
-  treasury: 40000000
+  name: 'Chicago Herons', abbr: 'CHH', div: 'AL Central', str: 82, market: 'mid',
+  cbtThreshold: 233000000, cbtYearsOver: 0, baseRevenue: 220000000, treasury: 40000000
 };
+
+const ALL_TEAMS = [
+  { name:'New York Emperors', abbr:'NYE', str:91, div:'AL East', market:'large', revenue:280000000 },
+  { name:'Boston Tides', abbr:'BOS', str:88, div:'AL East', market:'large', revenue:270000000 },
+  { name:'Toronto Raptors', abbr:'TOR', str:80, div:'AL East', market:'mid', revenue:235000000 },
+  { name:'Tampa Bay Storm', abbr:'TB', str:77, div:'AL East', market:'small', revenue:190000000 },
+  { name:'Baltimore Hawks', abbr:'BAL', str:73, div:'AL East', market:'small', revenue:205000000 },
+  { name:'Chicago Herons', abbr:'CHH', str:82, div:'AL Central', market:'mid', revenue:220000000 },
+  { name:'Detroit Wolves', abbr:'DET', str:85, div:'AL Central', market:'mid', revenue:240000000 },
+  { name:'Minnesota Frost', abbr:'MIN', str:83, div:'AL Central', market:'mid', revenue:230000000 },
+  { name:'Cleveland Rivets', abbr:'CLE', str:78, div:'AL Central', market:'small', revenue:200000000 },
+  { name:'Kansas City Scouts', abbr:'KC', str:72, div:'AL Central', market:'small', revenue:190000000 },
+  { name:'Houston Stallions', abbr:'HOU', str:86, div:'AL West', market:'large', revenue:260000000 },
+  { name:'Los Angeles Surf', abbr:'LA', str:84, div:'AL West', market:'large', revenue:260000000 },
+  { name:'Seattle Sharks', abbr:'SEA', str:79, div:'AL West', market:'mid', revenue:225000000 },
+  { name:'Texas Outlaws', abbr:'TEX', str:76, div:'AL West', market:'mid', revenue:235000000 },
+  { name:'Oakland Oaks', abbr:'OAK', str:68, div:'AL West', market:'small', revenue:175000000 }
+];
 
 const OPPONENTS = [
   { name:'New York Emperors', abbr:'NYE', str:91, w:0, l:0, div:'AL East' },
@@ -771,7 +785,10 @@ let state = {
   scoutFilter: 'all',
   franchiseHistory: [],
   awards: null,
-  fatigue: {}
+  fatigue: {},
+  tradeOffers: [],
+  tradeDeadlinePassed: false,
+  tradeLog: []
 };
 
 let payrollChart = null;
@@ -813,9 +830,48 @@ function seasonPitch(id) {
     era: (s.r/s.ip)*9, whip: (s.h+s.bb)/s.ip };
 }
 function seasonWar(pl) {
-  if (pl.isPitcher) { const sp = seasonPitch(pl.id); if (!sp) return 0; const e = sp.era; return e<=2.5?5.5:e<=3?4.5:e<=3.5?3.5:e<=4?2.5:e<=4.5?1.5:0.5; }
-  const sb = seasonBat(pl.id); if (!sb) return 0;
-  const ops = sb.obp+sb.slg; return ops>=0.900?5.5:ops>=0.830?4.5:ops>=0.770?3.5:ops>=0.700?2.5:ops>=0.650?1.5:0.5;
+  return calcWAR(pl.isPitcher, pl.isPitcher ? seasonPitch(pl.id) : seasonBat(pl.id), pl.pos, pl.age);
+}
+
+function calcWAR(isPitcher, stats, pos, age) {
+  if (!stats) return 0;
+  const runsPerWin = 10;
+
+  if (isPitcher) {
+    if (!stats.ip || stats.ip < 10) return 0;
+    const lgERA = 4.20;
+    const era = stats.era || (stats.r/stats.ip)*9;
+    const raa = (lgERA - era) / 9 * stats.ip;
+    const replLevel = stats.ip / 9 * 0.38;
+    return Math.round(Math.max(-1, Math.min(10, (raa + replLevel) / runsPerWin)) * 10) / 10;
+  } else {
+    if (!stats.ab || stats.ab < 50) return 0;
+    const lgOBP = 0.320, lgSLG = 0.410;
+    const obp = stats.obp || (stats.h+stats.bb)/(stats.ab+stats.bb);
+    const slg = stats.slg || (stats.h+(stats.d||0)+2*(stats.t||0)+3*stats.hr)/stats.ab;
+    const pa = stats.ab + (stats.bb||0);
+    const battingRuns = ((obp - lgOBP) * 1.8 + (slg - lgSLG) * 1.2) * pa / 6.5;
+    const posAdj = {C:1.2,SS:0.7,'2B':0.3,'3B':0.2,CF:0.25,LF:-0.7,RF:-0.7,'1B':-1.2,DH:-1.7,IF:0.2,OF:-0.4}[pos] || 0;
+    const posRuns = posAdj * (pa / 700);
+    const baseRunning = (stats.sb || 0) * 0.15;
+    const replLevel = pa / 700 * 2.0;
+    return Math.round(Math.max(-2, Math.min(12, (battingRuns + posRuns + baseRunning + replLevel) / runsPerWin)) * 10) / 10;
+  }
+}
+
+function calcWARfromRaw(isPitcher, rawStats, pos) {
+  if (isPitcher) {
+    if (!rawStats || !rawStats.ip || rawStats.ip < 10) return 0;
+    const era = (rawStats.r/rawStats.ip)*9;
+    const stats = { ...rawStats, era };
+    return calcWAR(true, stats, pos, 25);
+  } else {
+    if (!rawStats || !rawStats.ab || rawStats.ab < 50) return 0;
+    const avg = rawStats.h/rawStats.ab;
+    const obp = (rawStats.h+rawStats.bb)/(rawStats.ab+rawStats.bb);
+    const slg = (rawStats.h+(rawStats.d||0)+2*(rawStats.t||0)+3*rawStats.hr)/rawStats.ab;
+    return calcWAR(false, { ...rawStats, avg, obp, slg }, pos, 25);
+  }
 }
 
 // ════════════════════════ SAVE / LOAD ════════════════════════
@@ -824,11 +880,11 @@ const SAVE_KEY = 'herons_franchise_save';
 
 function saveGame() {
   const saveData = {
-    version: 2,
+    version: 3,
     state: state,
     players: PLAYERS,
     team: TEAM,
-    opponents: OPPONENTS.map(o => ({ name:o.name, abbr:o.abbr, str:o.str, w:o.w, l:o.l, div:o.div })),
+    opponents: OPPONENTS.map(o => ({ name:o.name, abbr:o.abbr, str:o.str, w:o.w, l:o.l, div:o.div, roster:o.roster, batting:o.batting||{}, pitching:o.pitching||{}, rotIdx:o.rotIdx||0 })),
     nextFAId: nextFAId
   };
   try {
@@ -849,10 +905,32 @@ function loadGame() {
     state = save.state;
     PLAYERS = save.players;
     TEAM = save.team;
+    if (!TEAM.abbr) TEAM.abbr = 'CHH';
+    if (!TEAM.div) TEAM.div = 'AL Central';
+    if (!TEAM.str) TEAM.str = 82;
+    if (!TEAM.market) TEAM.market = 'mid';
+    if (!TEAM.baseRevenue) TEAM.baseRevenue = 220000000;
     nextFAId = save.nextFAId || 200;
-    save.opponents.forEach((so, i) => {
-      if (OPPONENTS[i]) { OPPONENTS[i].w = so.w; OPPONENTS[i].l = so.l; }
-    });
+
+    if (save.opponents && save.opponents.length) {
+      OPPONENTS.length = 0;
+      save.opponents.forEach(so => {
+        OPPONENTS.push({
+          name:so.name, abbr:so.abbr, str:so.str, w:so.w||0, l:so.l||0, div:so.div,
+          roster: so.roster && so.roster.length ? so.roster : generateRosterForTeam(so.str),
+          batting: so.batting || {},
+          pitching: so.pitching || {},
+          rotIdx: so.rotIdx || 0
+        });
+      });
+    } else {
+      OPPONENTS.forEach(o => {
+        if (!o.roster || !o.roster.length) o.roster = generateRosterForTeam(o.str);
+        if (!o.batting) o.batting = {};
+        if (!o.pitching) o.pitching = {};
+        if (!o.rotIdx) o.rotIdx = 0;
+      });
+    }
     return true;
   } catch(e) {
     console.error('Load failed:', e);
@@ -870,6 +948,13 @@ function deleteSave() {
 function goHome() {
   saveGame();
   document.getElementById('gameContainer').style.display = 'none';
+  document.getElementById('startMenu').innerHTML = `<div style="text-align:center;max-width:480px;width:100%">
+    <div style="font-size:3rem;margin-bottom:8px">&#9918;</div>
+    <h1 style="font-family:Georgia,'Times New Roman',serif;font-size:2.2rem;letter-spacing:3px;color:#1b2a4a;text-transform:uppercase;margin-bottom:4px">Diamond Dynasty</h1>
+    <div style="font-family:Georgia,serif;font-size:1rem;color:#7a6b57;letter-spacing:2px;text-transform:uppercase;margin-bottom:40px">Franchise Manager</div>
+    <div style="display:flex;flex-direction:column;gap:12px;max-width:300px;margin:0 auto" id="menuButtons"></div>
+    <div style="margin-top:40px;font-size:0.78rem;color:#a09480">Manage your roster. Scout the draft. Build a dynasty.</div>
+  </div>`;
   showStartMenu();
 }
 
@@ -924,10 +1009,119 @@ function showStartMenu() {
   const hasSave = !!localStorage.getItem(SAVE_KEY);
   document.getElementById('menuButtons').innerHTML = `
     ${hasSave ? `<button class="btn btn-navy" onclick="continueGame()" style="padding:14px 24px;font-size:1.05rem;width:100%">Continue Franchise</button>` : ''}
-    <button class="btn ${hasSave?'btn-outline':'btn-navy'}" onclick="newFranchise()" style="padding:14px 24px;font-size:1.05rem;width:100%">New Franchise</button>
-    ${hasSave ? `<button class="btn btn-outline" onclick="deleteSave()" style="padding:10px 24px;font-size:0.85rem;width:100%;color:var(--red);border-color:var(--red)">Delete Save Data</button>` : ''}
+    <button class="btn ${hasSave?'btn-outline':'btn-navy'}" onclick="showTeamSelection()" style="padding:14px 24px;font-size:1.05rem;width:100%">New Franchise</button>
     <button class="btn btn-outline" onclick="showHelp()" style="padding:10px 24px;font-size:0.85rem;width:100%">How to Play</button>
+    ${hasSave ? `<button class="btn btn-outline" onclick="deleteSave()" style="padding:10px 24px;font-size:0.85rem;width:100%;color:var(--red);border-color:var(--red)">Delete Save Data</button>` : ''}
   `;
+}
+
+function showTeamSelection() {
+  if (localStorage.getItem(SAVE_KEY)) {
+    if (!confirm('Start a new franchise? This will overwrite your current save.')) return;
+    localStorage.removeItem(SAVE_KEY);
+  }
+  const menu = document.getElementById('startMenu');
+  menu.innerHTML = `
+    <div style="width:100%;max-width:650px;padding:20px">
+      <div style="text-align:center;margin-bottom:20px">
+        <div style="font-size:2rem">&#9918;</div>
+        <div style="font-family:Georgia,serif;font-size:1.3rem;color:#1b2a4a;letter-spacing:2px;text-transform:uppercase">Choose Your Team</div>
+        <div style="font-size:0.82rem;color:#7a6b57;margin-top:4px">Each team has different strength, market size, and revenue</div>
+      </div>
+      ${['AL East','AL Central','AL West'].map(div => `
+        <div style="margin-bottom:14px">
+          <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#7a6b57;margin-bottom:6px;padding-left:4px">${div}</div>
+          ${ALL_TEAMS.filter(t=>t.div===div).map(t => {
+            const idx = ALL_TEAMS.indexOf(t);
+            return `<div onclick="selectTeam(${idx})" style="display:flex;align-items:center;gap:10px;padding:10px 14px;margin-bottom:4px;background:#f9f5eb;border:1px solid #e4d8bd;border-radius:6px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='#1b2a4a';this.style.background='#f3eed8'" onmouseout="this.style.borderColor='#e4d8bd';this.style.background='#f9f5eb'">
+              <span style="font-family:Georgia,serif;font-weight:600;flex:1;font-size:0.95rem">${t.name}</span>
+              <span style="font-family:'Courier New',monospace;font-weight:700;background:${t.str>=85?'#1a6b30':t.str>=78?'#24774a':t.str>=72?'#b8880a':'#c46210'};color:white;padding:2px 7px;border-radius:4px;font-size:0.8rem" title="Team Strength">${t.str}</span>
+              <span style="font-size:0.72rem;color:${t.market==='large'?'#1a6b30':t.market==='mid'?'#b8880a':'#7a6b57'};min-width:40px;text-align:right">${t.market.charAt(0).toUpperCase()+t.market.slice(1)}</span>
+              <span style="font-family:'Courier New',monospace;font-size:0.72rem;color:#7a6b57;min-width:50px;text-align:right">$${(t.revenue/1000000).toFixed(0)}M</span>
+            </div>`;
+          }).join('')}
+        </div>
+      `).join('')}
+      <button onclick="location.reload()" style="width:100%;margin-top:10px;padding:10px;border:1px solid #d4c5a0;background:transparent;border-radius:6px;cursor:pointer;font-family:-apple-system,sans-serif;font-size:0.85rem;color:#7a6b57">Back to Menu</button>
+    </div>
+  `;
+}
+
+function generateRosterForTeam(str) {
+  const roster = [];
+  function makePlayer(pos, isPitcher, targetOvr) {
+    const pid = nextFAId++;
+    const ovr = clamp(targetOvr, 48, 95);
+    const age = isPitcher ? 23+Math.floor(Math.random()*12) : 22+Math.floor(Math.random()*13);
+    const pot = clamp(ovr + (age<=26 ? 5+Math.floor(Math.random()*12) : Math.floor(Math.random()*4)), ovr, 99);
+    const nm = randomFullName();
+    const sal = ovr>=85?Math.round((8+Math.random()*14)*1000000):ovr>=75?Math.round((3+Math.random()*8)*1000000):ovr>=65?Math.round((1+Math.random()*3)*1000000):720000;
+    const pl = {
+      id:pid, fn:nm.fn, ln:nm.ln, num:1+Math.floor(Math.random()*89), pos, pos2:null, age,
+      bats:Math.random()<0.7?'R':(Math.random()<0.5?'L':'S'), throws:Math.random()<0.75?'R':'L',
+      ovr, pot, isPitcher,
+      contract:{ salary:sal, yrs:ovr>=80?2+Math.floor(Math.random()*4):ovr>=70?2+Math.floor(Math.random()*3):3+Math.floor(Math.random()*3), type:ovr>=75?'FA Deal':age<=25?'Pre-Arb':'Arb' },
+      traits:[]
+    };
+    if (isPitcher) {
+      const q=ovr/100, isSP=pos==='SP';
+      const ip=isSP?Math.round(100+q*120+(Math.random()-0.5)*20):Math.round(25+q*45);
+      pl.pitching = { w:isSP?Math.round(3+q*15+(Math.random()-0.5)*3):Math.round(q*6), l:isSP?Math.round(14-q*8+(Math.random()-0.5)*3):Math.round(3-q*1.5), era:clamp(5.8-q*3.5+(Math.random()-0.5)*0.6,1.8,6.0), whip:clamp(1.7-q*0.8+(Math.random()-0.5)*0.12,0.85,1.65), k:Math.round(ip*(6+q*5)/9), bb:Math.round(ip*(4-q*2)/9), ip, sv:isSP?0:Math.round(clamp(q*35+(Math.random()-0.5)*10,0,50)), hld:isSP?0:Math.round(q*15), g:isSP?Math.round(20+q*14):Math.round(30+q*40), gs:isSP?Math.round(20+q*14):0, hr:Math.round(ip*(1.3-q*0.5)/9) };
+    } else {
+      const q=ovr/100;
+      const avg=clamp(0.190+q*0.12+(Math.random()-0.5)*0.02,0.200,0.330);
+      const iso=0.080+q*0.15+(Math.random()-0.5)*0.03;
+      const g=Math.round(90+q*70+(Math.random()-0.5)*20);
+      const h=Math.round(avg*g*3.6);
+      pl.batting = { avg, obp:clamp(avg+0.05+Math.random()*0.03,0.270,0.430), slg:clamp(avg+iso,0.320,0.620), hr:Math.round(clamp(iso*g*3.6*0.08,1,50)), rbi:Math.round(20+q*80+Math.random()*15), r:Math.round(40+q*60+(Math.random()-0.5)*15), h, sb:Math.round(Math.max(0,(1-q*0.3)*12*Math.random())), bb:Math.round(15+q*55+(Math.random()-0.5)*10), so:Math.round(160-q*70+(Math.random()-0.5)*20), g };
+    }
+    return pl;
+  }
+  ['C','1B','2B','SS','3B','LF','CF','RF','DH'].forEach(pos => {
+    roster.push(makePlayer(pos, false, str-10+Math.floor(Math.random()*22)));
+  });
+  ['C','IF','OF','OF'].forEach(pos => {
+    const rp = pos==='IF'?['2B','SS','3B'][Math.floor(Math.random()*3)]:pos==='OF'?['LF','CF','RF'][Math.floor(Math.random()*3)]:pos;
+    roster.push(makePlayer(rp, false, str-22+Math.floor(Math.random()*16)));
+  });
+  for(let i=0;i<5;i++) roster.push(makePlayer('SP', true, str-6-i*3+Math.floor(Math.random()*18)));
+  roster.push(makePlayer('CL', true, str-8+Math.floor(Math.random()*16)));
+  roster.push(makePlayer('SU', true, str-12+Math.floor(Math.random()*14)));
+  for(let i=0;i<5;i++) roster.push(makePlayer('RP', true, str-20+Math.floor(Math.random()*16)));
+  return roster;
+}
+
+function selectTeam(teamIdx) {
+  const chosen = ALL_TEAMS[teamIdx];
+  TEAM.name = chosen.name; TEAM.abbr = chosen.abbr; TEAM.div = chosen.div;
+  TEAM.str = chosen.str; TEAM.market = chosen.market; TEAM.baseRevenue = chosen.revenue;
+  TEAM.cbtYearsOver = 0;
+  TEAM.treasury = chosen.market==='large'?60000000:chosen.market==='mid'?40000000:25000000;
+
+  OPPONENTS.length = 0;
+  ALL_TEAMS.forEach((t,i) => { if(i!==teamIdx) OPPONENTS.push({name:t.name,abbr:t.abbr,str:t.str,w:0,l:0,div:t.div,roster:generateRosterForTeam(t.str),batting:{},pitching:{},rotIdx:0}); });
+
+  PLAYERS.length = 0;
+  generateRosterForTeam(chosen.str).forEach(pl => PLAYERS.push(pl));
+
+  const posP = PLAYERS.filter(x=>!x.isPitcher).sort((a,b)=>b.ovr-a.ovr);
+  state.lineup = posP.slice(0,9).map(x=>x.id);
+  const sps = PLAYERS.filter(x=>x.pos==='SP').sort((a,b)=>b.ovr-a.ovr);
+  state.rotation = sps.slice(0,5).map(x=>x.id);
+  const rps = PLAYERS.filter(x=>x.isPitcher&&x.pos!=='SP').sort((a,b)=>b.ovr-a.ovr);
+  state.bullpen = { closer:rps[0]?rps[0].id:null, setup:rps[1]?rps[1].id:null,
+    middle:[rps[2]?rps[2].id:null,rps[3]?rps[3].id:null,rps[4]?rps[4].id:null],
+    long:[rps[5]?rps[5].id:null,rps[6]?rps[6].id:null] };
+
+  state.seasonNumber = 1;
+  state.season = { gamesPlayed:0, wins:0, losses:0, schedule:generateSchedule(), results:[], lastBox:null, batting:{}, pitching:{}, rs:0, ra:0 };
+  state.franchiseHistory = []; state.playoffs = null; state.awards = null;
+  state.fatigue = {}; state.offseason = false; state.draftState = null;
+  state.freeAgents = []; state.newSignings = []; state.departedPlayers = [];
+  state.scoutingData = {}; state.draftProspects = [];
+  state.standingsDiv = chosen.div.split(' ')[1].toLowerCase();
+
+  startGameUI();
 }
 
 function continueGame() {
@@ -936,23 +1130,14 @@ function continueGame() {
   startGameUI();
 }
 
-function newFranchise() {
-  if (localStorage.getItem(SAVE_KEY)) {
-    if (!confirm('Start a new franchise? This will overwrite your current save.')) return;
-    localStorage.removeItem(SAVE_KEY);
-    location.reload();
-    return;
-  }
-  startGameUI();
-}
-
 function startGameUI() {
   document.getElementById('startMenu').style.display = 'none';
   document.getElementById('gameContainer').style.display = 'block';
+  document.getElementById('headerTeamName').textContent = TEAM.name;
   if (!state.draftProspects.length) generateDraftClass();
   updateHeader();
   const hi = document.getElementById('headerInfo');
-  if (hi) hi.textContent = 'AL Central • Season ' + state.seasonNumber;
+  if (hi) hi.textContent = TEAM.div + ' • Season ' + state.seasonNumber;
   renderTabs();
   render();
   setInterval(autoSave, 30000);
@@ -966,7 +1151,7 @@ function updateHeader() {
   if (w) w.textContent = state.season.wins;
   if (l) l.textContent = state.season.losses;
   if (st) st.textContent = state.offseason ? 'Off-Season' : (state.draftState ? 'Draft' : 'Season ' + state.seasonNumber);
-  if (hi) hi.textContent = 'AL Central • Season ' + state.seasonNumber;
+  if (hi) hi.textContent = TEAM.div + ' • Season ' + state.seasonNumber;
 }
 
 function renderTabs() {
@@ -1033,7 +1218,7 @@ function renderDashboard() {
   return `
     <div class="dash-grid">
       <div class="card">
-        <div class="card-title">Season 2 Record</div>
+        <div class="card-title">Season ${state.seasonNumber} Record</div>
         <div class="card-value">${sw} &ndash; ${sl}</div>
         <div class="card-sub">${gp > 0 ? ('.'+((sw/gp).toFixed(3).slice(2))+' &bull; '+gp+' games played') : 'No games played &mdash; hit Play Ball to start'}</div>
       </div>
@@ -1088,6 +1273,62 @@ function renderDashboard() {
           <span class="alert-text"><b>${pl.fn} ${pl.ln}</b> (${pl.pos}) &mdash; ${fmt$(pl.contract.salary)} &bull; Becomes a free agent after this season</span>
         </div>
       `).join('')}
+    </div>` : ''}
+
+    ${state.season.gamesPlayed >= 20 ? `
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">AL Leaderboards</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px">
+        <div>
+          <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Home Runs</div>
+          ${getLeagueLeaders('hr',5).map((p,i) => `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:0.82rem;${p.isUser?'font-weight:600':''}">
+            <span style="color:var(--text-muted);min-width:14px">${i+1}.</span>
+            <span style="flex:1">${p.name}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted)">${p.team.split(' ').pop()}</span>
+            <span style="font-family:var(--font-mono);font-weight:700;min-width:24px;text-align:right">${p.hr}</span>
+          </div>`).join('')}
+        </div>
+        <div>
+          <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Batting Average</div>
+          ${getLeagueLeaders('avg',5).map((p,i) => `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:0.82rem;${p.isUser?'font-weight:600':''}">
+            <span style="color:var(--text-muted);min-width:14px">${i+1}.</span>
+            <span style="flex:1">${p.name}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted)">${p.team.split(' ').pop()}</span>
+            <span style="font-family:var(--font-mono);font-weight:700;min-width:34px;text-align:right">${fmtAvg(p.avg)}</span>
+          </div>`).join('')}
+        </div>
+        <div>
+          <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">ERA Leaders</div>
+          ${getPitchingLeaders('era',5).map((p,i) => `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:0.82rem;${p.isUser?'font-weight:600':''}">
+            <span style="color:var(--text-muted);min-width:14px">${i+1}.</span>
+            <span style="flex:1">${p.name}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted)">${p.team.split(' ').pop()}</span>
+            <span style="font-family:var(--font-mono);font-weight:700;min-width:34px;text-align:right">${p.era.toFixed(2)}</span>
+          </div>`).join('')}
+        </div>
+        <div>
+          <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">WAR Leaders</div>
+          ${(() => {
+            const warAll = [];
+            PLAYERS.forEach(pl => { const w = seasonWar(pl); if(w>0) warAll.push({name:pl.fn+' '+pl.ln,team:TEAM.name,pos:pl.pos,war:w,isUser:true}); });
+            OPPONENTS.forEach(o => {
+              o.roster.forEach(pl => {
+                const raw = pl.isPitcher ? o.pitching[pl.id] : o.batting[pl.id];
+                if(!raw)return;
+                const w = calcWARfromRaw(pl.isPitcher, raw, pl.pos);
+                if(w>0) warAll.push({name:pl.fn+' '+pl.ln,team:o.name,pos:pl.pos,war:w,isUser:false});
+              });
+            });
+            warAll.sort((a,b)=>b.war-a.war);
+            return warAll.slice(0,5).map((p,i) => `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:0.82rem;${p.isUser?'font-weight:600':''}">
+              <span style="color:var(--text-muted);min-width:14px">${i+1}.</span>
+              <span style="flex:1">${p.name}</span>
+              <span style="font-size:0.72rem;color:var(--text-muted)">${p.team.split(' ').pop()}</span>
+              <span style="font-family:var(--font-mono);font-weight:700;min-width:28px;text-align:right">${p.war.toFixed(1)}</span>
+            </div>`).join('') || '<div style="font-size:0.82rem;color:var(--text-muted)">Not enough data</div>';
+          })()}
+        </div>
+      </div>
     </div>` : ''}
 
     ${renderFranchiseHistory()}
@@ -1220,7 +1461,7 @@ function renderRoster() {
         <div class="filter-group">
           ${filters.map(f => `<button class="filter-btn ${state.filter===f.id?'active':''}" onclick="filterRoster('${f.id}')">${f.label}</button>`).join('')}
         </div>
-        <div class="roster-count">${players.length} players &bull; ${state.season.gamesPlayed > 0 ? state.season.gamesPlayed+' games played' : 'Season 2'}</div>
+        <div class="roster-count">${players.length} players &bull; ${state.season.gamesPlayed > 0 ? state.season.gamesPlayed+' games played' : 'Season '+state.seasonNumber}</div>
       </div>
       <div class="table-wrap">
         <table><thead>${headers}</thead><tbody>${rows}</tbody></table>
@@ -1238,13 +1479,17 @@ function filterRoster(f) { state.filter = f; render(); }
 
 // ════════════════════════ MANAGE TAB ════════════════════════
 function renderManage() {
+  if (!state.tradeOffers) state.tradeOffers = [];
+  if (!state.tradeLog) state.tradeLog = [];
+  if (state.tradeDeadlinePassed === undefined) state.tradeDeadlinePassed = false;
   const view = state.manageView || 'lineup';
   return `
     <div class="filter-group" style="margin-bottom:14px">
       <button class="filter-btn ${view==='lineup'?'active':''}" onclick="state.manageView='lineup';render()">Batting Order</button>
       <button class="filter-btn ${view==='pitching'?'active':''}" onclick="state.manageView='pitching';render()">Pitching Staff</button>
+      <button class="filter-btn ${view==='trade'?'active':''}" onclick="state.manageView='trade';render()">Trades${state.tradeOffers.length?' ('+state.tradeOffers.length+')':''}</button>
     </div>
-    ${view === 'lineup' ? renderLineup() : renderRotation()}
+    ${view === 'lineup' ? renderLineup() : view === 'pitching' ? renderRotation() : renderTradeCenter()}
   `;
 }
 
@@ -1516,6 +1761,31 @@ function renderScouting() {
 
   return `
     <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Position Needs</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${(() => {
+          const posMap = {};
+          ['C','1B','2B','SS','3B','LF','CF','RF','DH','SP','RP/CL'].forEach(p => posMap[p] = 0);
+          PLAYERS.forEach(pl => {
+            if (pl.pos==='CL'||pl.pos==='SU') posMap['RP/CL']++;
+            else if (pl.pos==='RP') posMap['RP/CL']++;
+            else if (posMap[pl.pos] !== undefined) posMap[pl.pos]++;
+          });
+          const needs = [];
+          if (posMap['C']<2) needs.push({pos:'C',urgency:'high'});
+          if (posMap['SP']<5) needs.push({pos:'SP',urgency:'high'});
+          ['1B','2B','SS','3B'].forEach(p => { if(!posMap[p]) needs.push({pos:p,urgency:'high'}); });
+          ['LF','CF','RF'].forEach(p => { if(!posMap[p]) needs.push({pos:p,urgency:'mid'}); });
+          if (posMap['RP/CL']<5) needs.push({pos:'RP',urgency:'mid'});
+          const weakPos = PLAYERS.filter(x=>!x.isPitcher).filter(x=>x.ovr<65);
+          weakPos.forEach(pl => { if(!needs.find(n=>n.pos===pl.pos)) needs.push({pos:pl.pos,urgency:'low',note:'upgrade'}); });
+          if (!needs.length) return '<span style="color:var(--green);font-size:0.85rem">Roster is well-rounded. Scout for value and depth.</span>';
+          return needs.map(n => `<span style="padding:4px 10px;border-radius:4px;font-size:0.78rem;font-weight:600;background:${n.urgency==='high'?'#fef3f2':n.urgency==='mid'?'var(--gold-bg)':'var(--bg-alt)'};color:${n.urgency==='high'?'var(--red)':n.urgency==='mid'?'var(--gold)':'var(--text-muted)'};border:1px solid ${n.urgency==='high'?'#fecaca':n.urgency==='mid'?'#e8d5a0':'var(--border)'}">${n.urgency==='high'?'&#9888; ':n.note?'&#8593; ':''}${n.pos}${n.note?' (upgrade)':''}</span>`).join('');
+        })()}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
       <div class="card-title">Scouting Staff</div>
       <div style="font-size:0.72rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--navy);margin:12px 0 6px">Area Scouts &mdash; Deep individual coverage</div>
       ${areaScouts.map(sc=>scoutRow(sc)).join('')}
@@ -1572,6 +1842,380 @@ function renderScouting() {
         </tbody>
       </table></div>
     </div>
+  `;
+}
+
+// ════════════════════════ TRADING ════════════════════════
+
+function playerTradeValue(pl) {
+  const ovrVal = Math.pow(Math.max(pl.ovr-45,0)/10, 1.8) * 3;
+  const ageMod = pl.age<=25?1.4:pl.age<=28?1.2:pl.age<=31?1.0:pl.age<=33?0.7:0.4;
+  const potMod = pl.pot && pl.pot>pl.ovr ? 1+(pl.pot-pl.ovr)*0.02 : 1;
+  const contractMod = pl.contract.salary>10000000?0.85:pl.contract.salary<2000000?1.15:1;
+  return Math.round(ovrVal * ageMod * potMod * contractMod * 10) / 10;
+}
+
+function totalTradeValue(players) { return players.reduce((s,p) => s + playerTradeValue(p), 0); }
+
+function generateTradeOffers() {
+  if (state.tradeDeadlinePassed || state.season.gamesPlayed < 20) return;
+  if (state.tradeOffers.length >= 3) return;
+  if (Math.random() > 0.15) return;
+  const opp = OPPONENTS[Math.floor(Math.random()*OPPONENTS.length)];
+  if (!opp.roster || !opp.roster.length) return;
+  const theirPool = opp.roster.filter(x=>x.ovr>=55).sort((a,b)=>b.ovr-a.ovr);
+  const yourPool = PLAYERS.filter(x=>x.ovr>=58);
+  if (!theirPool.length || !yourPool.length) return;
+
+  const tradeBlock = state.tradeBlock || [];
+  const yourTarget = tradeBlock.length ? yourPool.filter(x=>tradeBlock.includes(x.id)) : yourPool;
+  if (!yourTarget.length) return;
+
+  // Build a 1-for-1 or 2-for-1 offer
+  const yourGuy = yourTarget[Math.floor(Math.random()*yourTarget.length)];
+  const yourVal = playerTradeValue(yourGuy);
+  const theirGuy = theirPool.find(t => Math.abs(playerTradeValue(t)-yourVal) < yourVal*0.4);
+  if (!theirGuy || state.tradeOffers.some(t=>t.theirPlayers[0].id===theirGuy.id)) return;
+
+  state.tradeOffers.push({ team:opp, theirPlayers:[theirGuy], yourPlayers:[yourGuy], id:Date.now()+Math.random() });
+}
+
+function acceptTrade(offerIdx) {
+  const offer = state.tradeOffers[offerIdx];
+  if (!offer) return;
+  executeTrade(offer.team, offer.yourPlayers, offer.theirPlayers);
+  state.tradeOffers.splice(offerIdx,1);
+  render();
+}
+
+function declineTrade(offerIdx) { state.tradeOffers.splice(offerIdx,1); render(); }
+
+function executeTrade(opp, givePlayers, getPlayers) {
+  givePlayers.forEach(pl => {
+    const idx = PLAYERS.findIndex(x=>x.id===pl.id);
+    if (idx!==-1) PLAYERS.splice(idx,1);
+    removePlayerFromAssignments(pl.id);
+    opp.roster.push(pl);
+  });
+  getPlayers.forEach(pl => {
+    const idx = opp.roster.findIndex(x=>x.id===pl.id);
+    if (idx!==-1) opp.roster.splice(idx,1);
+    PLAYERS.push(pl);
+  });
+  state.tradeLog.push({
+    season:state.seasonNumber, game:state.season.gamesPlayed, team:opp.name,
+    got:getPlayers.map(p=>p.fn+' '+p.ln+' ('+p.pos+', '+p.ovr+')').join(', '),
+    gave:givePlayers.map(p=>p.fn+' '+p.ln+' ('+p.pos+', '+p.ovr+')').join(', ')
+  });
+  fillRosterGaps();
+}
+
+function toggleTradeBlock(playerId) {
+  if (!state.tradeBlock) state.tradeBlock = [];
+  const idx = state.tradeBlock.indexOf(playerId);
+  if (idx===-1) state.tradeBlock.push(playerId);
+  else state.tradeBlock.splice(idx,1);
+  render();
+}
+
+function toggleWatchlist(playerId) {
+  if (!state.watchlist) state.watchlist = [];
+  const idx = state.watchlist.indexOf(playerId);
+  if (idx===-1) state.watchlist.push(playerId);
+  else state.watchlist.splice(idx,1);
+  render();
+}
+
+let tradeBuilder = { oppIdx:null, give:[], get:[] };
+
+function openTradeBuilder() {
+  tradeBuilder = { oppIdx:null, give:[], get:[] };
+  renderTradeModal();
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+function renderTradeModal() {
+  const opp = tradeBuilder.oppIdx !== null ? OPPONENTS[tradeBuilder.oppIdx] : null;
+  const giveVal = totalTradeValue(tradeBuilder.give);
+  const getVal = totalTradeValue(tradeBuilder.get);
+  const ratio = getVal > 0 ? giveVal / getVal : 0;
+  const balanced = ratio >= 0.8;
+  const barPct = getVal > 0 ? Math.min(150, (giveVal/getVal)*100) : 0;
+
+  document.getElementById('modalCard').innerHTML = `
+    <button class="modal-close" onclick="closeModal()">&#10005;</button>
+    <div style="padding:20px">
+      <div style="font-family:var(--font-serif);font-size:1.2rem;font-weight:700;color:var(--navy);margin-bottom:12px">Trade Builder</div>
+      <div style="margin-bottom:12px">
+        <select id="tradeTeamSel" onchange="tradeBuilder.oppIdx=this.value?parseInt(this.value):null;tradeBuilder.get=[];renderTradeModal()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:var(--radius);font-size:0.88rem">
+          <option value="">Choose a team...</option>
+          ${OPPONENTS.map((o,i)=>`<option value="${i}" ${tradeBuilder.oppIdx===i?'selected':''}>${o.name} (${o.w}-${o.l})</option>`).join('')}
+        </select>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:8px;margin-bottom:12px">
+        <div>
+          <div style="font-size:0.72rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--red);margin-bottom:6px">You Give (${fmt$(tradeBuilder.give.reduce((s,p)=>s+p.contract.salary,0))}/yr)</div>
+          ${tradeBuilder.give.map(pl => `<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:#fef3f2;border:1px solid #fecaca;border-radius:var(--radius);margin-bottom:4px;font-size:0.82rem">
+            <span style="font-family:var(--font-serif);font-weight:600;flex:1">${pl.fn} ${pl.ln}</span>
+            <span class="pos-badge">${pl.pos}</span>
+            <span class="ovr-badge" style="background:${ovrColor(pl.ovr)};font-size:0.68rem;width:24px;height:18px">${pl.ovr}</span>
+            <span onclick="tradeBuilder.give=tradeBuilder.give.filter(x=>x.id!==${pl.id});renderTradeModal()" style="cursor:pointer;color:var(--red);font-weight:700">&times;</span>
+          </div>`).join('')}
+          <select onchange="if(this.value){const pl=PLAYERS.find(x=>x.id===parseInt(this.value));if(pl&&!tradeBuilder.give.find(x=>x.id===pl.id)){tradeBuilder.give.push(pl);renderTradeModal();}}" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;color:var(--text-muted)">
+            <option value="">+ Add player...</option>
+            ${PLAYERS.filter(x=>!tradeBuilder.give.find(g=>g.id===x.id)).sort((a,b)=>b.ovr-a.ovr).map(pl=>`<option value="${pl.id}">${pl.fn} ${pl.ln} (${pl.pos}, ${pl.ovr})</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;font-size:1.4rem;color:var(--text-muted)">&#8644;</div>
+        <div>
+          <div style="font-size:0.72rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:6px">You Get (${opp?fmt$(tradeBuilder.get.reduce((s,p)=>s+p.contract.salary,0))+'/yr':'Select team'})</div>
+          ${tradeBuilder.get.map(pl => `<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--green-bg);border:1px solid #a7d8b8;border-radius:var(--radius);margin-bottom:4px;font-size:0.82rem">
+            <span style="font-family:var(--font-serif);font-weight:600;flex:1">${pl.fn} ${pl.ln}</span>
+            <span class="pos-badge">${pl.pos}</span>
+            <span class="ovr-badge" style="background:${ovrColor(pl.ovr)};font-size:0.68rem;width:24px;height:18px">${pl.ovr}</span>
+            <span onclick="tradeBuilder.get=tradeBuilder.get.filter(x=>x.id!==${pl.id});renderTradeModal()" style="cursor:pointer;color:var(--red);font-weight:700">&times;</span>
+          </div>`).join('')}
+          ${opp ? `<select onchange="if(this.value){const pl=OPPONENTS[${tradeBuilder.oppIdx}].roster.find(x=>x.id===parseInt(this.value));if(pl&&!tradeBuilder.get.find(x=>x.id===pl.id)){tradeBuilder.get.push(pl);renderTradeModal();}}" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;color:var(--text-muted)">
+            <option value="">+ Add player...</option>
+            ${opp.roster.filter(x=>!tradeBuilder.get.find(g=>g.id===x.id)).sort((a,b)=>b.ovr-a.ovr).map(pl=>`<option value="${pl.id}">${pl.fn} ${pl.ln} (${pl.pos}, ${pl.ovr}, Age ${pl.age})</option>`).join('')}
+          </select>` : ''}
+        </div>
+      </div>
+
+      ${(tradeBuilder.give.length && tradeBuilder.get.length) ? `
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:4px">
+            <span>Trade Value Balance</span>
+            <span style="color:${balanced?'var(--green)':'var(--red)'}; font-weight:600">${balanced?'Fair Trade':'Lopsided — offer more'}</span>
+          </div>
+          <div style="height:10px;background:var(--bg-alt);border-radius:5px;overflow:hidden;position:relative">
+            <div style="position:absolute;left:calc(80% - 1px);top:0;width:2px;height:100%;background:var(--green);z-index:1" title="Acceptance threshold"></div>
+            <div style="height:100%;width:${Math.min(100,barPct*0.67)}%;background:${balanced?'var(--green)':'var(--red)'};border-radius:5px;transition:width 0.2s"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:0.68rem;color:var(--text-muted);margin-top:2px">
+            <span>Your offer: ${giveVal.toFixed(1)} value</span>
+            <span>They want: ${getVal.toFixed(1)} value</span>
+          </div>
+        </div>
+        <button class="btn btn-navy" onclick="submitTradeBuilder()" style="width:100%;padding:10px">Propose Trade</button>
+      ` : `<div style="text-align:center;color:var(--text-muted);font-size:0.85rem;padding:10px">Add players to both sides to build a trade</div>`}
+    </div>
+  `;
+}
+
+function submitTradeBuilder() {
+  if (!tradeBuilder.give.length || !tradeBuilder.get.length || tradeBuilder.oppIdx===null) return;
+  const opp = OPPONENTS[tradeBuilder.oppIdx];
+  const giveVal = totalTradeValue(tradeBuilder.give);
+  const getVal = totalTradeValue(tradeBuilder.get);
+  if (giveVal / getVal >= 0.8) {
+    executeTrade(opp, tradeBuilder.give, tradeBuilder.get);
+    closeModal();
+    render();
+    const names = tradeBuilder.get.map(p=>p.fn+' '+p.ln).join(', ');
+    setTimeout(()=>alert('Trade accepted! You acquired '+names+'.'),100);
+  } else {
+    alert(opp.name+' rejected the trade. Your offer doesn\'t match the value of what you\'re asking for. Try adding more to your side.');
+  }
+}
+
+let browseTeamIdx = 0;
+
+function openRosterBrowser() {
+  browseTeamIdx = 0;
+  renderRosterBrowser();
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+function renderRosterBrowser() {
+  if (!state.watchlist) state.watchlist = [];
+  const opp = OPPONENTS[browseTeamIdx];
+  if (!opp || !opp.roster) return;
+  const pos = opp.roster.filter(x=>!x.isPitcher).sort((a,b)=>b.ovr-a.ovr);
+  const pit = opp.roster.filter(x=>x.isPitcher).sort((a,b)=>b.ovr-a.ovr);
+
+  document.getElementById('modalCard').innerHTML = `
+    <button class="modal-close" onclick="closeModal()">&#10005;</button>
+    <div style="padding:20px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <div style="font-family:var(--font-serif);font-size:1.2rem;font-weight:700;color:var(--navy);flex:1">Browse Rosters</div>
+      </div>
+      <select onchange="browseTeamIdx=parseInt(this.value);renderRosterBrowser()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:var(--radius);font-size:0.88rem;margin-bottom:14px">
+        ${OPPONENTS.map((o,i)=>`<option value="${i}" ${i===browseTeamIdx?'selected':''}>${o.name} (${o.w}-${o.l}) &mdash; STR ${o.str}</option>`).join('')}
+      </select>
+
+      <div style="max-height:55vh;overflow-y:auto">
+        <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Position Players (${pos.length})</div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-bottom:14px">
+          <thead><tr><th style="cursor:default;text-align:left;padding:4px 6px">Player</th><th style="cursor:default">Pos</th><th style="cursor:default">Age</th><th style="cursor:default">OVR</th><th style="cursor:default">Salary</th><th style="cursor:default">Yrs</th><th style="cursor:default"></th></tr></thead>
+          <tbody>${pos.map(pl => {
+            const onWL = state.watchlist.includes(pl.id);
+            return `<tr style="${onWL?'background:var(--gold-bg)':''}">
+              <td style="font-family:var(--font-serif);font-weight:600;padding:4px 6px">${pl.fn} ${pl.ln}</td>
+              <td style="text-align:center"><span class="pos-badge">${pl.pos}</span></td>
+              <td class="stat-num" style="text-align:center">${pl.age}</td>
+              <td style="text-align:center"><span class="ovr-badge" style="background:${ovrColor(pl.ovr)};font-size:0.68rem;width:24px;height:18px">${pl.ovr}</span></td>
+              <td class="stat-num" style="text-align:center;color:var(--green)">${fmt$(pl.contract.salary)}</td>
+              <td class="stat-num" style="text-align:center">${pl.contract.yrs}</td>
+              <td style="text-align:center"><button onclick="toggleWatchlist(${pl.id});renderRosterBrowser()" style="border:none;background:none;cursor:pointer;font-size:1rem" title="${onWL?'Remove from watchlist':'Add to watchlist'}">${onWL?'&#9733;':'&#9734;'}</button></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+
+        <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Pitchers (${pit.length})</div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+          <thead><tr><th style="cursor:default;text-align:left;padding:4px 6px">Player</th><th style="cursor:default">Pos</th><th style="cursor:default">Age</th><th style="cursor:default">OVR</th><th style="cursor:default">Salary</th><th style="cursor:default">Yrs</th><th style="cursor:default"></th></tr></thead>
+          <tbody>${pit.map(pl => {
+            const onWL = state.watchlist.includes(pl.id);
+            return `<tr style="${onWL?'background:var(--gold-bg)':''}">
+              <td style="font-family:var(--font-serif);font-weight:600;padding:4px 6px">${pl.fn} ${pl.ln}</td>
+              <td style="text-align:center"><span class="pos-badge">${pl.pos}</span></td>
+              <td class="stat-num" style="text-align:center">${pl.age}</td>
+              <td style="text-align:center"><span class="ovr-badge" style="background:${ovrColor(pl.ovr)};font-size:0.68rem;width:24px;height:18px">${pl.ovr}</span></td>
+              <td class="stat-num" style="text-align:center;color:var(--green)">${fmt$(pl.contract.salary)}</td>
+              <td class="stat-num" style="text-align:center">${pl.contract.yrs}</td>
+              <td style="text-align:center"><button onclick="toggleWatchlist(${pl.id});renderRosterBrowser()" style="border:none;background:none;cursor:pointer;font-size:1rem" title="${onWL?'Remove from watchlist':'Add to watchlist'}">${onWL?'&#9733;':'&#9734;'}</button></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderTradeCenter() {
+  if (!state.tradeBlock) state.tradeBlock = [];
+  if (!state.watchlist) state.watchlist = [];
+  const gp = state.season.gamesPlayed;
+  const deadline = state.tradeDeadlinePassed;
+  const deadlineGame = 110;
+
+  // Generate opponent trade blocks
+  const oppBlocks = [];
+  if (!deadline && gp >= 30) {
+    OPPONENTS.forEach(o => {
+      if (!o.roster || !o.roster.length) return;
+      const totalG = o.w + o.l;
+      if (totalG < 20) return;
+      const pct = o.w / totalG;
+      const isSeller = pct < 0.47;
+      const isBuyer = pct > 0.55;
+      if (!isSeller && !isBuyer) return;
+
+      const sorted = o.roster.filter(x => x.ovr >= 60).sort((a, b) => b.ovr - a.ovr);
+      if (!sorted.length) return;
+
+      if (isSeller) {
+        const expiring = sorted.filter(x => x.contract.yrs <= 2 && x.ovr >= 68);
+        const best = expiring.length ? expiring[0] : sorted.find(x => x.age >= 29 && x.ovr >= 70);
+        if (best) {
+          const wants = best.ovr >= 80 ? 'top prospect or young starter' : best.ovr >= 70 ? 'young player with upside' : 'any young depth piece';
+          oppBlocks.push({ team: o, player: best, type: 'selling', blurb: o.name + ' ('+o.w+'-'+o.l+') are sellers. Looking to move <b>' + best.fn + ' ' + best.ln + '</b> (' + best.pos + ', ' + best.ovr + ' OVR, ' + best.age + 'yo). Want: ' + wants + '.' });
+        }
+      } else {
+        const need = o.roster.filter(x => !x.isPitcher).length < 12 ? 'a bat' : o.roster.filter(x => x.pos === 'SP').length < 4 ? 'starting pitching' : 'bullpen help';
+        const worstStarter = sorted.filter(x => x.ovr >= 72).pop();
+        if (worstStarter) {
+          oppBlocks.push({ team: o, player: worstStarter, type: 'buying', blurb: o.name + ' ('+o.w+'-'+o.l+') are buyers looking for <b>' + need + '</b>. Willing to part with <b>' + worstStarter.fn + ' ' + worstStarter.ln + '</b> (' + worstStarter.pos + ', ' + worstStarter.ovr + ' OVR). Want: impact player ready now.' });
+        }
+      }
+    });
+  }
+
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Trade Center</span>
+        <span style="font-size:0.8rem;font-family:var(--font-mono);color:${deadline?'var(--red)':gp>=100?'var(--gold)':'var(--green)'}">
+          ${deadline?'Deadline Passed':'Deadline: Game '+deadlineGame+' ('+Math.max(0,deadlineGame-gp)+' left)'}
+        </span>
+      </div>
+      ${!deadline?`<div style="display:flex;gap:8px;margin-bottom:12px">
+        <button class="btn btn-navy" onclick="openTradeBuilder()">Build a Trade</button>
+        <button class="btn btn-outline" onclick="openRosterBrowser()">Browse Rosters</button>
+      </div>`:`<div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Trade deadline has passed.</div>`}
+
+      ${state.tradeOffers.length ? `
+        <div style="font-size:0.72rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--gold);margin:12px 0 8px">Incoming Offers</div>
+        ${state.tradeOffers.map((offer,i) => `
+          <div style="padding:12px;background:var(--gold-bg);border:1px solid #e8d5a0;border-radius:var(--radius);margin-bottom:8px">
+            <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:8px"><b>${offer.team.name}</b> proposes:</div>
+            <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center">
+              <div style="text-align:center">
+                <div style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase">You Get</div>
+                ${offer.theirPlayers.map(pl=>`<div style="font-family:var(--font-serif);font-weight:600">${pl.fn} ${pl.ln} <span style="color:var(--text-muted);font-size:0.78rem">${pl.pos}, ${pl.ovr}</span></div>`).join('')}
+              </div>
+              <div style="font-size:1.2rem;color:var(--text-muted)">&#8644;</div>
+              <div style="text-align:center">
+                <div style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase">You Give</div>
+                ${offer.yourPlayers.map(pl=>`<div style="font-family:var(--font-serif);font-weight:600">${pl.fn} ${pl.ln} <span style="color:var(--text-muted);font-size:0.78rem">${pl.pos}, ${pl.ovr}</span></div>`).join('')}
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:10px;justify-content:center">
+              <button class="btn btn-navy" onclick="acceptTrade(${i})" style="padding:6px 20px">Accept</button>
+              <button class="btn btn-outline" onclick="declineTrade(${i})" style="padding:6px 20px">Decline</button>
+            </div>
+          </div>
+        `).join('')}
+      ` : (!deadline?'<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:0.85rem">No incoming offers. Put players on the trade block to attract deals.</div>':'')}
+    </div>
+
+    ${oppBlocks.length ? `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Trade Rumors &amp; Available Players</div>
+      ${oppBlocks.map(ob => `
+        <div style="padding:10px 14px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;gap:10px">
+          <div style="width:8px;height:8px;border-radius:50%;background:${ob.type==='selling'?'var(--red)':'var(--green)'};flex-shrink:0" title="${ob.type==='selling'?'Seller':'Buyer'}"></div>
+          <div style="flex:1;font-size:0.84rem;line-height:1.4">${ob.blurb}</div>
+          <div style="display:flex;gap:4px;flex-shrink:0">
+            <button onclick="toggleWatchlist(${ob.player.id});render()" class="btn btn-outline" style="padding:3px 8px;font-size:0.7rem">${state.watchlist.includes(ob.player.id)?'&#9733; Saved':'&#9734; Watch'}</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>` : ''}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="card">
+        <div class="card-title">Trade Block <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400">&mdash; your players available for trade</span></div>
+        ${PLAYERS.sort((a,b)=>b.ovr-a.ovr).map(pl => {
+          const onBlock = state.tradeBlock.includes(pl.id);
+          return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border-light);font-size:0.82rem">
+            <input type="checkbox" ${onBlock?'checked':''} onchange="toggleTradeBlock(${pl.id})" style="accent-color:var(--navy)">
+            <span style="font-family:var(--font-serif);font-weight:600;flex:1">${pl.fn} ${pl.ln}</span>
+            <span class="pos-badge">${pl.pos}</span>
+            <span class="ovr-badge" style="background:${ovrColor(pl.ovr)};font-size:0.68rem;width:24px;height:18px">${pl.ovr}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted)">${fmt$(pl.contract.salary)}</span>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="card">
+        <div class="card-title">Watchlist <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400">&mdash; players you're targeting</span></div>
+        ${state.watchlist.length ? state.watchlist.map(wid => {
+          let pl=null, team='';
+          OPPONENTS.forEach(o=>{const f=o.roster.find(x=>x.id===wid);if(f){pl=f;team=o.name;}});
+          if(!pl)return '';
+          return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border-light);font-size:0.82rem">
+            <span style="font-family:var(--font-serif);font-weight:600;flex:1">${pl.fn} ${pl.ln}</span>
+            <span class="pos-badge">${pl.pos}</span>
+            <span class="ovr-badge" style="background:${ovrColor(pl.ovr)};font-size:0.68rem;width:24px;height:18px">${pl.ovr}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted)">${team.split(' ').pop()}</span>
+            <span onclick="toggleWatchlist(${wid})" style="cursor:pointer;color:var(--red);font-size:0.8rem">&#10005;</span>
+          </div>`;
+        }).join('') : '<div style="padding:12px;color:var(--text-muted);font-size:0.85rem">Browse team rosters in the Trade Builder to add players.</div>'}
+      </div>
+    </div>
+
+    ${state.tradeLog.length ? `
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">Trade History</div>
+      ${[...state.tradeLog].reverse().map(t => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border-light);font-size:0.82rem">
+          <span class="stat-num" style="min-width:55px">S${t.season} G${t.game}</span>
+          <b>w/ ${t.team}</b>: Got <span style="color:var(--green)">${t.got}</span> &bull; Gave <span style="color:var(--red)">${t.gave}</span>
+        </div>
+      `).join('')}
+    </div>` : ''}
   `;
 }
 
@@ -2053,95 +2697,46 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 
 // ════════════════════════ AWARDS & HISTORY ════════════════════════
 
-function generateLeagueCandidate(type, teamPool) {
-  const team = teamPool[Math.floor(Math.random()*teamPool.length)];
-  const nm = randomFullName();
-  const str = team.str || 75;
-  if (type === 'mvp') {
-    const q = (str + Math.random()*15) / 100;
-    const avg = clamp(0.260 + q*0.08 + (Math.random()-0.5)*0.025, 0.270, 0.340);
-    const hr = Math.round(25 + q*25 + (Math.random()-0.5)*10);
-    const rbi = Math.round(70 + q*50 + (Math.random()-0.5)*15);
-    const obp = clamp(avg + 0.06 + Math.random()*0.04, 0.330, 0.440);
-    const slg = clamp(avg + 0.15 + q*0.12, 0.420, 0.650);
-    return { name:nm.fn+' '+nm.ln, team:team.name, avg, hr, rbi, obp, slg, ops:obp+slg, type:'bat' };
-  } else if (type === 'cy') {
-    const q = (str + Math.random()*15) / 100;
-    const era = clamp(3.8 - q*2.0 + (Math.random()-0.5)*0.5, 1.8, 3.5);
-    const w = Math.round(10 + q*10 + (Math.random()-0.5)*3);
-    const l = Math.round(12 - q*6 + (Math.random()-0.5)*2);
-    const k = Math.round(140 + q*80 + (Math.random()-0.5)*20);
-    return { name:nm.fn+' '+nm.ln, team:team.name, era, w, l, k, type:'pitch' };
-  } else {
-    const nm2 = randomFullName();
-    const age = 21 + Math.floor(Math.random()*3);
-    if (Math.random() < 0.5) {
-      const avg = clamp(0.250 + Math.random()*0.06, 0.250, 0.310);
-      const hr = Math.round(12 + Math.random()*18);
-      return { name:nm2.fn+' '+nm2.ln, team:team.name, age, avg, hr, ops: avg+0.06+avg+0.12+Math.random()*0.08, type:'bat' };
-    } else {
-      const era = clamp(3.0 + Math.random()*1.5, 2.5, 4.5);
-      const k = Math.round(100 + Math.random()*80);
-      return { name:nm2.fn+' '+nm2.ln, team:team.name, age, era, k, type:'pitch' };
-    }
-  }
-}
-
 function calculateAwards() {
-  const batters = PLAYERS.filter(x => !x.isPitcher).map(pl => {
-    const sb = seasonBat(pl.id);
-    return { pl, sb, war: seasonWar(pl) };
-  }).filter(x => x.sb && x.sb.ab >= 200);
+  // League-wide MVP — highest WAR among position players
+  const mvpAll = [];
+  PLAYERS.filter(x=>!x.isPitcher).forEach(pl=>{ const sb=seasonBat(pl.id); if(sb&&sb.ab>=200) mvpAll.push({name:pl.fn+' '+pl.ln,team:TEAM.name,pos:pl.pos,isUser:true,war:seasonWar(pl),stats:fmtAvg(sb.avg)+' / '+sb.hr+' HR / '+sb.rbi+' RBI / '+seasonWar(pl).toFixed(1)+' WAR'}); });
+  OPPONENTS.forEach(o=>{ o.roster.filter(x=>!x.isPitcher).forEach(pl=>{ const s=o.batting[pl.id]; if(!s||s.ab<200)return; const w=calcWARfromRaw(false,s,pl.pos); const avg=s.h/s.ab; mvpAll.push({name:pl.fn+' '+pl.ln,team:o.name,pos:pl.pos,isUser:false,war:w,stats:fmtAvg(avg)+' / '+s.hr+' HR / '+s.rbi+' RBI / '+w.toFixed(1)+' WAR'}); }); });
+  mvpAll.sort((a,b)=>b.war-a.war);
+  const mvp = mvpAll[0] ? { name:mvpAll[0].name, team:mvpAll[0].team, isUser:mvpAll[0].isUser, stats:mvpAll[0].stats } : null;
 
-  const pitchers = PLAYERS.filter(x => x.isPitcher).map(pl => {
-    const sp = seasonPitch(pl.id);
-    return { pl, sp, war: seasonWar(pl) };
-  }).filter(x => x.sp && x.sp.ip >= 50);
+  // League-wide Cy Young — highest WAR among pitchers
+  const cyAll = [];
+  PLAYERS.filter(x=>x.isPitcher).forEach(pl=>{ const sp=seasonPitch(pl.id); if(sp&&sp.ip>=80) cyAll.push({name:pl.fn+' '+pl.ln,team:TEAM.name,pos:pl.pos,isUser:true,war:seasonWar(pl),stats:sp.era.toFixed(2)+' ERA / '+sp.w+'-'+sp.l+' / '+sp.k+' K / '+seasonWar(pl).toFixed(1)+' WAR'}); });
+  OPPONENTS.forEach(o=>{ o.roster.filter(x=>x.isPitcher).forEach(pl=>{ const s=o.pitching[pl.id]; if(!s||s.ip<80)return; const w=calcWARfromRaw(true,s,pl.pos); const era=(s.r/s.ip)*9; cyAll.push({name:pl.fn+' '+pl.ln,team:o.name,pos:pl.pos,isUser:false,war:w,stats:era.toFixed(2)+' ERA / '+s.w+'-'+s.l+' / '+s.k+' K / '+w.toFixed(1)+' WAR'}); }); });
+  cyAll.sort((a,b)=>b.war-a.war);
+  const cyYoung = cyAll[0] ? { name:cyAll[0].name, team:cyAll[0].team, isUser:cyAll[0].isUser, stats:cyAll[0].stats } : null;
 
-  const teamMvp = [...batters].sort((a,b) => (b.sb?b.sb.obp+b.sb.slg:0) - (a.sb?a.sb.obp+a.sb.slg:0))[0] || null;
-  const teamCy = pitchers.filter(x=>x.sp&&x.sp.ip>=80).sort((a,b) => a.sp.era - b.sp.era)[0] || null;
+  // ROY — best young player league-wide
+  const allRookies = [];
+  PLAYERS.filter(x=>!x.isPitcher&&x.age<=25&&x.traits.some(t=>t==='Draft Pick'||t==='Minor Leaguer'||t==='Prospect')).forEach(pl=>{
+    const sb=seasonBat(pl.id);
+    if(sb&&sb.ab>=100)allRookies.push({name:pl.fn+' '+pl.ln,team:TEAM.name,isUser:true,ops:sb.obp+sb.slg,stats:fmtAvg(sb.avg)+' / '+sb.hr+' HR',type:'bat'});
+  });
+  OPPONENTS.forEach(o=>{
+    o.roster.filter(x=>!x.isPitcher&&x.age<=25&&x.traits.some(t=>t==='Draft Pick'||t==='Minor Leaguer'||t==='Prospect')).forEach(pl=>{
+      const s=o.batting[pl.id];
+      if(!s||s.ab<100)return;
+      const avg=s.h/s.ab;
+      allRookies.push({name:pl.fn+' '+pl.ln,team:o.name,isUser:false,ops:(s.h+s.bb)/(s.ab+s.bb)+(s.h+s.d+2*s.t+3*s.hr)/s.ab,stats:fmtAvg(avg)+' / '+s.hr+' HR',type:'bat'});
+    });
+  });
+  allRookies.sort((a,b)=>b.ops-a.ops);
+  const roy = allRookies[0] ? { name:allRookies[0].name, team:allRookies[0].team, isUser:allRookies[0].isUser, stats:allRookies[0].stats } : null;
 
-  const rookies = batters.filter(x => x.pl.age <= 25 && x.pl.traits.some(t=>t==='Draft Pick'||t==='Minor Leaguer'||t==='Prospect'));
-  const rookiePitchers = pitchers.filter(x => x.pl.age <= 25 && x.pl.traits.some(t=>t==='Draft Pick'||t==='Minor Leaguer'||t==='Prospect'));
-  const allRookies = [...rookies.map(r=>({...r,type:'bat'})), ...rookiePitchers.map(r=>({...r,type:'pitch'}))];
-  const teamRoy = allRookies.sort((a,b) => b.war - a.war)[0] || null;
+  // Team leaders (for recap)
+  const batters = PLAYERS.filter(x=>!x.isPitcher).map(pl=>({pl,sb:seasonBat(pl.id)})).filter(x=>x.sb);
+  const pitchers = PLAYERS.filter(x=>x.isPitcher).map(pl=>({pl,sp:seasonPitch(pl.id)})).filter(x=>x.sp);
+  const hrLeader = [...batters].sort((a,b)=>(b.sb?b.sb.hr:0)-(a.sb?a.sb.hr:0))[0]||null;
+  const avgLeader = [...batters].filter(x=>x.sb&&x.sb.ab>=300).sort((a,b)=>(b.sb?b.sb.avg:0)-(a.sb?a.sb.avg:0))[0]||null;
+  const kLeader = [...pitchers].sort((a,b)=>(b.sp?b.sp.k:0)-(a.sp?a.sp.k:0))[0]||null;
 
-  const strongTeams = OPPONENTS.filter(o => o.str >= 78);
-  const leagueMvps = Array.from({length:3}, () => generateLeagueCandidate('mvp', strongTeams));
-  const leagueCys = Array.from({length:3}, () => generateLeagueCandidate('cy', strongTeams));
-  const leagueRoys = Array.from({length:2}, () => generateLeagueCandidate('roy', OPPONENTS));
-
-  let mvp, cyYoung, roy;
-  const userMvpOps = teamMvp && teamMvp.sb ? teamMvp.sb.obp + teamMvp.sb.slg : 0;
-  const bestLeagueMvp = leagueMvps.sort((a,b) => b.ops - a.ops)[0];
-  if (teamMvp && userMvpOps >= bestLeagueMvp.ops) {
-    mvp = { name:teamMvp.pl.fn+' '+teamMvp.pl.ln, team:'Chicago Herons', isUser:true, stats:fmtAvg(teamMvp.sb.avg)+' / '+teamMvp.sb.hr+' HR / '+teamMvp.sb.rbi+' RBI', pl:teamMvp.pl, sb:teamMvp.sb };
-  } else {
-    mvp = { name:bestLeagueMvp.name, team:bestLeagueMvp.team, isUser:false, stats:fmtAvg(bestLeagueMvp.avg)+' / '+bestLeagueMvp.hr+' HR / '+bestLeagueMvp.rbi+' RBI' };
-  }
-
-  const userCyEra = teamCy && teamCy.sp ? teamCy.sp.era : 99;
-  const bestLeagueCy = leagueCys.sort((a,b) => a.era - b.era)[0];
-  if (teamCy && userCyEra <= bestLeagueCy.era) {
-    cyYoung = { name:teamCy.pl.fn+' '+teamCy.pl.ln, team:'Chicago Herons', isUser:true, stats:teamCy.sp.era.toFixed(2)+' ERA / '+teamCy.sp.w+'-'+teamCy.sp.l+' / '+teamCy.sp.k+' K', pl:teamCy.pl, sp:teamCy.sp };
-  } else {
-    cyYoung = { name:bestLeagueCy.name, team:bestLeagueCy.team, isUser:false, stats:bestLeagueCy.era.toFixed(2)+' ERA / '+bestLeagueCy.w+'-'+bestLeagueCy.l+' / '+bestLeagueCy.k+' K' };
-  }
-
-  const bestLeagueRoy = leagueRoys[0];
-  const userRoyWar = teamRoy ? teamRoy.war : -1;
-  const leagueRoyScore = bestLeagueRoy.type==='bat' ? (bestLeagueRoy.ops||0.700)*3 : (5-bestLeagueRoy.era)*1.2;
-  if (teamRoy && userRoyWar >= leagueRoyScore) {
-    roy = { name:teamRoy.pl.fn+' '+teamRoy.pl.ln, team:'Chicago Herons', isUser:true, stats:teamRoy.type==='bat'?fmtAvg(teamRoy.sb.avg)+' / '+teamRoy.sb.hr+' HR':'', pl:teamRoy.pl };
-  } else if (bestLeagueRoy) {
-    roy = { name:bestLeagueRoy.name, team:bestLeagueRoy.team, isUser:false, stats:bestLeagueRoy.type==='bat'?fmtAvg(bestLeagueRoy.avg)+' / '+bestLeagueRoy.hr+' HR':bestLeagueRoy.era.toFixed(2)+' ERA / '+bestLeagueRoy.k+' K' };
-  } else { roy = null; }
-
-  const hrLeader = [...batters].sort((a,b) => (b.sb?b.sb.hr:0) - (a.sb?a.sb.hr:0))[0] || null;
-  const avgLeader = [...batters].filter(x=>x.sb&&x.sb.ab>=300).sort((a,b) => (b.sb?b.sb.avg:0) - (a.sb?a.sb.avg:0))[0] || null;
-  const kLeader = [...pitchers].sort((a,b) => (b.sp?b.sp.k:0) - (a.sp?a.sp.k:0))[0] || null;
-
-  state.awards = { mvp, cyYoung, roy, hrLeader, avgLeader, kLeader, teamMvp, teamCy, teamRoy };
+  state.awards = { mvp, cyYoung, roy, hrLeader, avgLeader, kLeader };
   return state.awards;
 }
 
@@ -2294,6 +2889,148 @@ function restoreStarters() {
   }
 }
 
+// ════════════════════════ AI LEAGUE SIM ════════════════════════
+
+function simAIAtBat(batter, pitcher) {
+  const q = batter.ovr / 100;
+  const pq = pitcher.ovr / 100;
+  const pitchAdv = (pq - 0.65) * 0.35;
+  const hitR = clamp(0.190 + q*0.12 - pitchAdv, 0.16, 0.33);
+  const kR = clamp(0.22 - q*0.06 + pitchAdv*0.8, 0.10, 0.35);
+  const bbR = clamp(0.06 + q*0.05 - pitchAdv*0.4, 0.03, 0.14);
+  const hrP = clamp(batter.isPitcher ? 0.02 : (batter.batting ? batter.batting.hr / Math.max(batter.batting.h,1) : 0.08), 0.02, 0.20);
+  const r = Math.random();
+  if (r < kR) return 'K';
+  if (r < kR+bbR) return 'BB';
+  if (r < kR+bbR+hitR) {
+    const h = Math.random();
+    if (h < hrP) return 'HR';
+    if (h < hrP+0.015) return '3B';
+    if (h < hrP+0.20) return '2B';
+    return '1B';
+  }
+  return 'OUT';
+}
+
+function simAIGame(team1, team2) {
+  const lu1 = team1.roster.filter(p=>!p.isPitcher).slice(0,9);
+  const lu2 = team2.roster.filter(p=>!p.isPitcher).slice(0,9);
+  const sps1 = team1.roster.filter(p=>p.pos==='SP');
+  const sps2 = team2.roster.filter(p=>p.pos==='SP');
+  const sp1 = sps1[team1.rotIdx % Math.max(sps1.length,1)];
+  const sp2 = sps2[team2.rotIdx % Math.max(sps2.length,1)];
+  team1.rotIdx = (team1.rotIdx+1) % Math.max(sps1.length,1);
+  team2.rotIdx = (team2.rotIdx+1) % Math.max(sps2.length,1);
+
+  let score1=0, score2=0, hits1=0, hits2=0;
+  const bs1={}, bs2={}, ps1={h:0,r:0,bb:0,k:0,ip:0}, ps2={h:0,r:0,bb:0,k:0,ip:0};
+
+  function simHalfAI(batters, pitcher, bs, oppPs) {
+    let outs=0, runs=0, bases=0, idx=0;
+    while(outs<3) {
+      const b = batters[idx%batters.length];
+      if (!bs[b.id]) bs[b.id]={ab:0,h:0,r:0,rbi:0,bb:0,so:0,hr:0,d:0,t:0};
+      const res = simAIAtBat(b, pitcher);
+      if (res==='K') { outs++; bs[b.id].ab++; bs[b.id].so++; oppPs.k++; }
+      else if (res==='BB') { bs[b.id].bb++; oppPs.bb++; if(bases>=3){runs++;bs[b.id].rbi++;} bases=Math.min(bases+1,3); }
+      else if (res==='OUT') { outs++; bs[b.id].ab++; if(bases>=3&&outs<3&&Math.random()<0.3){runs++;bs[b.id].rbi++;bases--;} }
+      else {
+        bs[b.id].ab++; bs[b.id].h++; oppPs.h++;
+        let rbis=0;
+        if(res==='HR'){rbis=1+Math.min(bases,3);bases=0;bs[b.id].hr++;bs[b.id].r++;}
+        else if(res==='3B'){rbis=Math.min(bases,3);bases=1;bs[b.id].t++;}
+        else if(res==='2B'){rbis=Math.min(bases,2);bases=Math.min(bases-rbis+1,3);bs[b.id].d++;}
+        else{rbis=bases>=3?1:0;bases=Math.min(bases+1-rbis+1,3);}
+        runs+=rbis; bs[b.id].rbi+=rbis;
+      }
+      idx++;
+    }
+    return runs;
+  }
+
+  for(let inn=0;inn<9;inn++){
+    score1+=simHalfAI(lu1,sp2,bs1,ps2);
+    score2+=simHalfAI(lu2,sp1,bs2,ps1);
+  }
+  if(score1===score2){score1+=Math.random()<0.5?1:0;score2+=score1===score2?1:0;}
+
+  ps1.ip=9; ps2.ip=9; ps1.r=score2; ps2.r=score1;
+
+  // Record stats
+  function mergeTeamStats(team, bs, sp, ps, won) {
+    for(const id in bs){
+      if(!team.batting[id])team.batting[id]={g:0,ab:0,h:0,r:0,rbi:0,bb:0,so:0,hr:0,d:0,t:0};
+      team.batting[id].g++;
+      for(const f in bs[id])team.batting[id][f]+=bs[id][f];
+    }
+    if(sp){
+      if(!team.pitching[sp.id])team.pitching[sp.id]={gs:0,w:0,l:0,ip:0,h:0,r:0,bb:0,k:0};
+      team.pitching[sp.id].gs++;
+      if(won)team.pitching[sp.id].w++;else team.pitching[sp.id].l++;
+      team.pitching[sp.id].ip+=ps.ip;
+      team.pitching[sp.id].h+=ps.h;team.pitching[sp.id].r+=ps.r;
+      team.pitching[sp.id].bb+=ps.bb;team.pitching[sp.id].k+=ps.k;
+    }
+  }
+
+  mergeTeamStats(team1,bs1,sp1,ps1,score1>score2);
+  mergeTeamStats(team2,bs2,sp2,ps2,score2>score1);
+  if(score1>score2){team1.w++;team2.l++;}else{team2.w++;team1.l++;}
+}
+
+function simAIGames() {
+  const teams = [...OPPONENTS];
+  for(let i=teams.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[teams[i],teams[j]]=[teams[j],teams[i]];}
+  for(let i=0;i<teams.length-1;i+=2){
+    simAIGame(teams[i],teams[i+1]);
+  }
+}
+
+function getLeagueLeaders(category, count) {
+  const all = [];
+  // User team
+  PLAYERS.filter(x=>!x.isPitcher).forEach(pl=>{
+    const sb=seasonBat(pl.id);
+    if(sb&&sb.ab>=100)all.push({name:pl.fn+' '+pl.ln,team:TEAM.name,pos:pl.pos,...sb,isUser:true});
+  });
+  // AI teams
+  OPPONENTS.forEach(o=>{
+    o.roster.filter(x=>!x.isPitcher).forEach(pl=>{
+      const s=o.batting[pl.id];
+      if(!s||s.ab<100)return;
+      const avg=s.h/s.ab,obp=(s.h+s.bb)/(s.ab+s.bb),slg=(s.h+s.d+2*s.t+3*s.hr)/s.ab;
+      all.push({name:pl.fn+' '+pl.ln,team:o.name,pos:pl.pos,...s,avg,obp,slg,isUser:false});
+    });
+  });
+  if(category==='hr')all.sort((a,b)=>b.hr-a.hr);
+  else if(category==='avg')all.sort((a,b)=>b.avg-a.avg);
+  else if(category==='rbi')all.sort((a,b)=>b.rbi-a.rbi);
+  else all.sort((a,b)=>(b.obp+b.slg)-(a.obp+a.slg));
+  return all.slice(0,count||10);
+}
+
+function getPitchingLeaders(category, count) {
+  const all = [];
+  PLAYERS.filter(x=>x.isPitcher).forEach(pl=>{
+    const sp=seasonPitch(pl.id);
+    if(sp&&sp.ip>=30)all.push({name:pl.fn+' '+pl.ln,team:TEAM.name,pos:pl.pos,...sp,isUser:true});
+  });
+  OPPONENTS.forEach(o=>{
+    if(!o.pitching) return;
+    o.roster.filter(x=>x.isPitcher).forEach(pl=>{
+      const s=o.pitching[pl.id];
+      if(!s||s.ip<30)return;
+      const era=(s.r/s.ip)*9, whip=(s.h+s.bb)/s.ip;
+      all.push({name:pl.fn+' '+pl.ln,team:o.name,pos:pl.pos,gs:s.gs,w:s.w,l:s.l,ip:s.ip,h:s.h,r:s.r,bb:s.bb,k:s.k,era,whip,isUser:false});
+    });
+  });
+  if(category==='era')all.sort((a,b)=>a.era-b.era);
+  else if(category==='k')all.sort((a,b)=>b.k-a.k);
+  else if(category==='w')all.sort((a,b)=>b.w-a.w);
+  else all.sort((a,b)=>a.era-b.era);
+  return all.slice(0,count||10);
+}
+
 // ════════════════════════ SIM CONTROLS ════════════════════════
 
 function simToEnd() {
@@ -2333,6 +3070,34 @@ function enterOffseason() {
   state.lastFinancials = { revenue: rev, payroll: tp, cbt: cbt.amount, cbtRate: cbt.rate, profit, treasury: TEAM.treasury };
 
   saveSeasonToHistory();
+
+  // Age AI rosters and handle their FA turnover
+  OPPONENTS.forEach(o => {
+    o.roster.forEach(pl => {
+      pl.age++;
+      if (!pl.isPitcher) {
+        if (pl.age>=33) { pl.ovr=Math.max(40,pl.ovr-2-Math.floor(Math.random()*2)); pl.batting.avg=clamp(pl.batting.avg*0.97,0.18,0.35); pl.batting.slg=clamp(pl.batting.slg*0.96,0.28,0.65); }
+        else if (pl.age<=27&&pl.pot>pl.ovr) { pl.ovr=Math.min(pl.pot,pl.ovr+Math.floor((pl.pot-pl.ovr)*0.2)); pl.batting.avg=clamp(pl.batting.avg*1.02,0.18,0.35); }
+      } else {
+        if (pl.age>=33) { pl.ovr=Math.max(40,pl.ovr-2-Math.floor(Math.random()*2)); pl.pitching.era=clamp(pl.pitching.era*1.08,1.5,7); }
+        else if (pl.age<=27&&pl.pot>pl.ovr) { pl.ovr=Math.min(pl.pot,pl.ovr+Math.floor((pl.pot-pl.ovr)*0.2)); pl.pitching.era=clamp(pl.pitching.era*0.96,1.5,7); }
+      }
+      pl.contract.yrs--;
+    });
+    // Replace expired contracts with new generated players
+    o.roster = o.roster.filter(pl => pl.contract.yrs > 0);
+    while (o.roster.filter(x=>!x.isPitcher).length < 13) {
+      const pos = ['C','1B','2B','SS','3B','LF','CF','RF','OF'][Math.floor(Math.random()*9)];
+      const npl = generateRosterForTeam(o.str).find(x=>!x.isPitcher);
+      if(npl){npl.id=nextFAId++;o.roster.push(npl);}
+    }
+    while (o.roster.filter(x=>x.isPitcher).length < 12) {
+      const npl = generateRosterForTeam(o.str).find(x=>x.isPitcher);
+      if(npl){npl.id=nextFAId++;o.roster.push(npl);}
+    }
+    o.batting = {}; o.pitching = {}; o.rotIdx = 0;
+  });
+
   state.freeAgents = [];
   state.faFilter = 'all';
 
@@ -2714,8 +3479,10 @@ function startNewSeason() {
   state.draftState = null;
   state.fatigue = {};
   state.awards = null;
+  state.tradeOffers = [];
+  state.tradeDeadlinePassed = false;
   state.tab = 'dashboard';
-  OPPONENTS.forEach(o => { o.w=0; o.l=0; });
+  OPPONENTS.forEach(o => { o.w=0; o.l=0; o.batting={}; o.pitching={}; o.rotIdx=0; });
   generateDraftClass();
   document.getElementById('headerWins').textContent = '0';
   document.getElementById('headerLosses').textContent = '0';
@@ -2853,7 +3620,7 @@ function filterFA(f) { state.faFilter = f; render(); }
 
 function beginDraft() {
   const order = getAllTeams().sort((a,b) => teamPct(a) - teamPct(b)).map(t => t.name);
-  const userPos = order.indexOf('Chicago Herons');
+  const userPos = order.indexOf(TEAM.name);
   const rounds = 5;
   const totalPicks = rounds * order.length;
   const prospects = state.draftProspects.length ? state.draftProspects : generateProspects(totalPicks + 10);
@@ -2936,7 +3703,7 @@ function getCurrentDraftTeam() {
 }
 
 function isUserPick() {
-  return getCurrentDraftTeam() === 'Chicago Herons';
+  return getCurrentDraftTeam() === TEAM.name;
 }
 
 function currentRound() {
@@ -2954,10 +3721,10 @@ function draftPlayer(prospectIdx) {
   if (prospect.drafted) return;
 
   prospect.drafted = true;
-  prospect.draftedBy = 'Chicago Herons';
+  prospect.draftedBy = TEAM.name;
   const player = createDraftedPlayer(prospect);
   PLAYERS.push(player);
-  ds.picks.push({ round:currentRound(), pick:currentPickInRound(), team:'Chicago Herons', prospect, revealed:true });
+  ds.picks.push({ round:currentRound(), pick:currentPickInRound(), team:TEAM.name, prospect, revealed:true });
   ds.currentPick++;
   if (ds.currentPick >= ds.totalPicks) { ds.done = true; }
   render();
@@ -3029,7 +3796,7 @@ function renderDraft() {
   if (df==='sp') filtered = filtered.filter(p=>p.pos==='SP');
   if (df==='rp') filtered = filtered.filter(p=>p.isPitcher&&p.pos!=='SP');
 
-  const userPicks = ds.picks.filter(pk => pk.team === 'Chicago Herons');
+  const userPicks = ds.picks.filter(pk => pk.team === TEAM.name);
 
   return `
     <div class="dash-grid" style="margin-bottom:16px">
@@ -3107,10 +3874,10 @@ function renderDraft() {
       <div class="table-wrap" style="max-height:250px;overflow-y:auto"><table>
         <thead><tr><th style="cursor:default">Rd</th><th style="cursor:default">Pick</th><th style="cursor:default">Team</th><th style="cursor:default">Player</th><th style="cursor:default">Pos</th><th style="cursor:default">Scout</th></tr></thead>
         <tbody>
-          ${[...ds.picks].reverse().slice(0,30).map(pk => `<tr style="cursor:default;${pk.team==='Chicago Herons'?'background:var(--gold-bg);font-weight:600':''}">
+          ${[...ds.picks].reverse().slice(0,30).map(pk => `<tr style="cursor:default;${pk.team===TEAM.name?'background:var(--gold-bg);font-weight:600':''}">
             <td class="stat-num">${pk.round}</td>
             <td class="stat-num">${pk.pick}</td>
-            <td style="font-size:0.82rem">${pk.team==='Chicago Herons'?'&#9918; ':'' }${pk.team}</td>
+            <td style="font-size:0.82rem">${pk.team===TEAM.name?'&#9918; ':'' }${pk.team}</td>
             <td class="player-name-cell">${pk.prospect.fn} ${pk.prospect.ln}</td>
             <td><span class="pos-badge">${pk.prospect.pos}</span></td>
             <td><span class="ovr-badge" style="background:${ovrColor(pk.revealed?pk.prospect.trueOvr:pk.prospect.scoutOvr)};font-size:0.7rem;width:28px;height:20px">${pk.revealed?pk.prospect.trueOvr:pk.prospect.scoutOvr}</span></td>
@@ -3349,8 +4116,8 @@ function simulateGame(schedGame) {
     userBS: isHome ? hBS : aBS,
     oppBS: isHome ? aBS : hBS,
     win: userScore > oppScore,
-    awayName: isHome ? opp.name : 'Chicago Herons',
-    homeName: isHome ? 'Chicago Herons' : opp.name
+    awayName: isHome ? opp.name : TEAM.name,
+    homeName: isHome ? TEAM.name : opp.name
   };
 }
 
@@ -3380,15 +4147,17 @@ function recordGame(result) {
   }
   ps.ip += result.isHome ? result.innA.length : result.innH.filter(r => r !== 'X').length;
 
-  OPPONENTS.forEach(o => {
-    const wp = 0.400 + (o.str - 60) * 0.006;
-    if (Math.random() < wp) o.w++; else o.l++;
-  });
+  simAIGames();
 
   advanceScouting();
   updateFatigue(result);
   if (state.season.gamesPlayed % 3 === 0) applyFatigueRests();
   if (state.season.gamesPlayed >= 162) calculateAwards();
+  if (state.season.gamesPlayed >= 110 && !state.tradeDeadlinePassed) {
+    state.tradeDeadlinePassed = true;
+    state.tradeOffers = [];
+  }
+  if (!state.tradeDeadlinePassed) generateTradeOffers();
   autoSave();
 }
 
@@ -3443,7 +4212,7 @@ function getStreak() {
 
 function getAllTeams() {
   return [
-    { name:'Chicago Herons', abbr:'CHH', w:state.season.wins, l:state.season.losses, div:'AL Central', isUser:true },
+    { name:TEAM.name, abbr:TEAM.abbr, w:state.season.wins, l:state.season.losses, div:TEAM.div, isUser:true },
     ...OPPONENTS.map(o => ({ name:o.name, abbr:o.abbr, w:o.w, l:o.l, div:o.div, str:o.str, isUser:false }))
   ];
 }
@@ -3608,8 +4377,8 @@ function renderPlayoffBracket() {
         <span>${isChamp?'&#127942; ':''}Postseason${isChamp?' &mdash; WORLD CHAMPIONS!':''}</span>
         <span style="font-size:0.8rem;font-family:var(--font-sans);font-weight:600;color:${isDone?'var(--green)':'var(--gold)'}">${isDone?'Complete':roundLabel[po.round]}</span>
       </div>
-      ${po.userMade?`<div style="margin-bottom:10px;font-size:0.85rem">Chicago Herons: <b>#${po.userSeed} seed</b></div>`
-        :`<div style="margin-bottom:10px;font-size:0.85rem;color:var(--text-muted)">Chicago Herons did not qualify</div>`}
+      ${po.userMade?`<div style="margin-bottom:10px;font-size:0.85rem">${TEAM.name}: <b>#${po.userSeed} seed</b></div>`
+        :`<div style="margin-bottom:10px;font-size:0.85rem;color:var(--text-muted)">${TEAM.name} did not qualify</div>`}
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
         <div>
           <div style="font-size:0.70rem;font-weight:700;letter-spacing:1.5px;color:${po.round==='wc'?'var(--navy)':'var(--text-muted)'};margin-bottom:8px;text-transform:uppercase">Wild Card (Bo3)</div>
@@ -3665,7 +4434,7 @@ function renderPlay() {
           <div class="game-at">@</div>
           <div class="game-team">
             <div class="game-team-label">${nextGame.isHome ? 'Home' : 'Away'}</div>
-            <div class="game-team-name" style="color:var(--navy)">Chicago Herons</div>
+            <div class="game-team-name" style="color:var(--navy)">${TEAM.name}</div>
             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${state.season.wins}-${state.season.losses}</div>
           </div>
         </div>
@@ -3708,7 +4477,7 @@ function renderPlay() {
 
   // Standings
   const stdTabs = [{id:'east',l:'AL East'},{id:'central',l:'AL Central'},{id:'west',l:'AL West'},{id:'wc',l:'Wild Card'}];
-  const ad = state.standingsDiv || 'central';
+  const ad = state.standingsDiv || TEAM.div.split(' ')[1].toLowerCase();
   let standingsRows;
   if (ad === 'wc') {
     const all = getAllTeams();
@@ -3820,7 +4589,7 @@ function renderBoxScore(box) {
       </div>
       <div class="box-halves">
         <div>
-          <div style="font-family:var(--font-serif);font-size:0.72rem;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">Chicago Herons &mdash; ${box.userSP.fn} ${box.userSP.ln} (SP)</div>
+          <div style="font-family:var(--font-serif);font-size:0.72rem;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">${TEAM.name} &mdash; ${box.userSP.fn} ${box.userSP.ln} (SP)</div>
           <div class="table-wrap"><table><thead><tr><th style="cursor:default">Batter</th><th style="cursor:default">Pos</th><th style="cursor:default">AB</th><th style="cursor:default">H</th><th style="cursor:default">R</th><th style="cursor:default">RBI</th><th style="cursor:default">BB</th><th style="cursor:default">SO</th><th style="cursor:default">HR</th></tr></thead>
           <tbody>${batRows(box.userLU, box.userBS, true)}</tbody></table></div>
         </div>
